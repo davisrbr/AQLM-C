@@ -10,9 +10,9 @@ from transformers import AutoConfig, AutoModelForCausalLM
 
 from src.aq import QuantizedWeight
 
-MODEL_ERROR_MSG = "Unsupported model type {} - only 'llama', 'Yi', 'opt' and 'falcon' are supported"
-FALCON_TYPES = ("falcon", "refinedweb", "refinedwebmodel")
-LLAMA_LIKE = ("llama", "Yi", "mistral", "mixtral", "gemma", "cohere")
+MODEL_ERROR_MSG = "Unsupported model type {} - only 'llama', 'Yi', 'opt', 'falcon', 'phi3', 'gpt_neox' are supported"
+FALCON_TYPES = ("falcon", "refinedweb", "refinedwebmodel",)
+LLAMA_LIKE = ("llama", "Yi", "mistral", "mixtral", "gemma", "cohere", "qwen2")
 
 
 @contextmanager
@@ -86,7 +86,7 @@ def get_model(
 
 def get_model_head(model):
     head = torch.nn.ModuleList()
-    if model.config.model_type in LLAMA_LIKE:
+    if model.config.model_type in (*LLAMA_LIKE, "phi3"):
         if model.model.norm is not None:
             head.append(model.model.norm)
         head.append(model.lm_head)
@@ -100,13 +100,17 @@ def get_model_head(model):
         if model.model.decoder.project_out is not None:
             head.append(model.model.decoder.project_out)
         head.append(model.lm_head)
+    elif model.config.model_type.lower() == "gpt_neox":
+        if model.gpt_neox.final_layer_norm is not None:
+            head.append(model.gpt_neox.final_layer_norm)
+        head.append(model.embed_out)
     else:
         raise ValueError(MODEL_ERROR_MSG.format(model.config.model_type))
     return head
 
 
 def get_lm_logits(inps_, model):
-    if model.config.model_type in LLAMA_LIKE:
+    if model.config.model_type in (*LLAMA_LIKE, "phi3"):
         hidden_states = inps_.unsqueeze(0)
         if model.model.norm is not None:
             hidden_states = model.model.norm(hidden_states)
@@ -123,21 +127,27 @@ def get_lm_logits(inps_, model):
         if model.model.decoder.project_out is not None:
             hidden_states = model.model.decoder.project_out(hidden_states)
         lm_logits = model.lm_head(hidden_states)
+    elif model.config.model_type == "gpt_neox":
+        hidden_states = inps_.unsqueeze(0)
+        if model.gpt_neox.final_layer_norm is not None:
+            hidden_states = model.gpt_neox.final_layer_norm(hidden_states)
+        lm_logits = model.embed_out(hidden_states)
     else:
         raise ValueError(MODEL_ERROR_MSG.format(model.config.model_type))
     return lm_logits
 
 
 def get_layers(model):
-    if model.config.model_type in LLAMA_LIKE:
+    if model.config.model_type in (*LLAMA_LIKE, "phi3"):
         return model.model.layers
     elif model.config.model_type.lower() in FALCON_TYPES:
         return model.transformer.h
     elif model.config.model_type == "opt":
         return model.model.decoder.layers
+    elif model.config.model_type == "gpt_neox":
+        return model.gpt_neox.layers
     else:
         raise ValueError(MODEL_ERROR_MSG.format(model.config.model_type))
-
 
 def find_sublayers(module, layers=(nn.Conv2d, nn.Linear)):
     res = {}
@@ -156,7 +166,7 @@ def get_sequential_groups(model):
             ["mlp.up_proj", "mlp.gate_proj"],
             ["mlp.down_proj"],
         ]
-    elif model.config.model_type.lower() in FALCON_TYPES:
+    elif model.config.model_type.lower() in FALCON_TYPES or model.config.model_type.lower() == "gpt_neox":
         return [
             ["self_attention.query_key_value"],
             ["self_attention.dense"],
@@ -172,6 +182,8 @@ def get_sequential_groups(model):
             ["fc1"],
             ["fc2"],
         ]
+    elif model.config.model_type == "phi3":
+        return [["self_attn.qkv_proj"], ["self_attn.o_proj"], ["mlp.gate_up_proj"], ["mlp.down_proj"]]
     else:
         raise ValueError(MODEL_ERROR_MSG.format(model.config.model_type))
 
