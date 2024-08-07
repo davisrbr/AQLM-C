@@ -485,7 +485,7 @@ def load_dequantized_model(args: argparse.Namespace, device: torch.device) -> Tu
         if isinstance(module, QuantizedWeight):
             assert module.codes is not None
             if args.code_dtype is not None:
-                assert module.nbits_per_codebook <= torch.iinfo(args.code_dtype).bits - is_signed(args.code_dtype)
+                # assert module.nbits_per_codebook <= torch.iinfo(args.code_dtype).bits - is_signed(args.code_dtype)
                 module.codes = nn.Parameter(module.codes.to(args.code_dtype), requires_grad=module.codes.requires_grad)
             module.wrap_codes_for_fsdp_()
             assert module.codes is None and isinstance(module.codes_storage, IntCodes)

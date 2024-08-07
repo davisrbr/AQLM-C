@@ -37,7 +37,7 @@ export TRANSFORMERS_CACHE=/data/davis_brown/
 export MODEL_PATH=/data/davis_brown/.cache/huggingface/hub/models--EleutherAI--pythia-70m/snapshots/a39f36b100fe8a5377810d56c3f4789b9c53ac42
 export DATASET_PATH=c4
 export SAVE_PATH={save_path}
-export WANDB_PROJECT=AQ_pythia
+export WANDB_PROJECT=AQ_pythia_sweep
 export WANDB_NAME={wandb_name}
 
 python ../main.py $MODEL_PATH $DATASET_PATH \\
@@ -75,7 +75,7 @@ def main():
 
     hyperparameter_grid = {
         'num_codebooks': [1, 2, 4],
-        'nbits_per_codebook': [4, 8, 16],
+        'nbits_per_codebook': [4, 8, 16, 64, 128],
         'in_group_size': [1, 8, 16],
         'out_group_size': [1, 8, 16],
     }
