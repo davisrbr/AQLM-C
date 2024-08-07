@@ -1,6 +1,7 @@
 """ Core mathematics for Additive Quantization (AQ): initialization, reconstruction and beam search"""
 from __future__ import annotations
 from typing import List, Optional, Union, Tuple
+from einops import rearrange
 
 import torch
 import torch.nn as nn
@@ -310,13 +311,19 @@ def init_aq_kmeans(
     :param kwargs: any additional params are forwarded to fit_kmeans
     """
     out_features, in_features = reference_weight.shape
+    assert out_features % out_group_size == 0, "out_features must be divisible by out_group_size"
+    assert in_features % in_group_size == 0, "in_features must be divisible by in_group_size"
+    
     num_out_groups = out_features // out_group_size
     num_in_groups = in_features // in_group_size
-    weight_residue = (
-        reference_weight.reshape(num_out_groups, out_group_size, num_in_groups, in_group_size)
-        .clone()
-        .swapaxes(-3, -2)
-        .reshape(num_out_groups * num_in_groups, out_group_size * in_group_size)
+    
+    weight_residue = rearrange(
+        reference_weight,
+        "(num_out_groups out_group_size) (num_in_groups in_group_size) -> (num_out_groups num_in_groups) (out_group_size in_group_size)",
+        num_out_groups=num_out_groups,
+        num_in_groups=num_in_groups,
+        out_group_size=out_group_size,
+        in_group_size=in_group_size
     )
     codebooks = []
     codes = []

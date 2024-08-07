@@ -251,12 +251,22 @@ def load_dequantized_model(model, load_path):
 
 def load_quantized_model(model, load_path):
     """Load quantized model"""
-
-    for layer_index in range(len(model.model.layers)):
-        model.model.layers[layer_index] = torch.load(
-            os.path.join(load_path, str(layer_index) + ".pth"),
-            map_location=model.model.layers[layer_index].input_layernorm.weight.device,
-        )
+    if model.config.model_type == "gpt_neox":
+        for layer_index in range(len(model.gpt_neox.layers)):
+            model.gpt_neox.layers[layer_index] = torch.load(
+                os.path.join(load_path, str(layer_index) + ".pth"),
+                map_location=model.gpt_neox.layers[layer_index].input_layernorm.weight.device,
+            )
+        for module in model.gpt_neox.layers[layer_index].modules():
+            if isinstance(module, QuantizedWeight):
+                if not hasattr(module, 'codes_storage'):
+                    module.codes_storage = None  # backwards compatibility
+    else:
+        for layer_index in range(len(model.model.layers)):
+            model.model.layers[layer_index] = torch.load(
+                os.path.join(load_path, str(layer_index) + ".pth"),
+                map_location=model.model.layers[layer_index].input_layernorm.weight.device,
+            )
         for module in model.model.layers[layer_index].modules():
             if isinstance(module, QuantizedWeight):
                 if not hasattr(module, 'codes_storage'):

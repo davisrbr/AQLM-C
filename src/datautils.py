@@ -181,7 +181,7 @@ def get_loaders(
     seqlen=2048,
     eval_mode=False,
     model_path=None,
-    use_fast_tokenizer=False,
+    use_fast_tokenizer=True,
     trust_remote_code=None,
 ):
     """
@@ -224,7 +224,7 @@ def get_loaders(
             )
     else:
         tokenizer = AutoTokenizer.from_pretrained(
-            model_path, use_fast=use_fast_tokenizer, trust_remote_code=trust_remote_code
+            model_path, use_fast=True, trust_remote_code=trust_remote_code
         )
 
         if name.lower() == "wikitext2":

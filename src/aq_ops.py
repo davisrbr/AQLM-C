@@ -154,11 +154,17 @@ def one_rank_at_a_time(local: bool = False, group_size: int = 1):
     world_size = int(os.environ.get("LOCAL_WORLD_SIZE" if local else "WORLD_SIZE", 0)) if distributed else 1
     if distributed:
         torch.distributed.barrier()
-    for current_group_index in range(world_size // group_size):
+    
+    num_groups = max(1, world_size // group_size)
+    for current_group_index in range(num_groups):
         if current_group_index == rank // group_size:
             yield
         if distributed:
             torch.distributed.barrier()
+
+    # Ensure we always yield at least once
+    if num_groups == 0:
+        yield
 
 
 @contextlib.contextmanager
