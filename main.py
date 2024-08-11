@@ -12,7 +12,7 @@ from transformers import PreTrainedModel
 
 from aq_engine import AQEngine
 from src.aq import QuantizedLinear
-from src.datautils import get_loaders
+from src.datautils import get_loaders, evaluate_perplexity
 from src.finetune import finetune_groupwise
 from src.modelutils import (
     FALCON_TYPES,
@@ -32,7 +32,49 @@ try:
     has_wandb = True
 except ModuleNotFoundError:
     has_wandb = False
+import functools
+import os
+from typing import Callable, Iterator, Optional, Sequence
 
+import torch
+import torch.nn.functional as F
+
+@functools.lru_cache()
+def maybe_script(fn: callable) -> callable:
+    """Apply torch.jit.script to function unless one is using TPU. TPU does not support torch.jit.script."""
+    using_tpu = bool(os.environ.get("TPU_NAME"))
+    # this is a reserved variable that must be set to TPU address (e.g. grpc://11.22.33.44:1337) for TPU to function
+    should_script = int(os.environ.get("AQ_USE_JIT", not using_tpu))
+    return torch.jit.script(fn) if should_script else fn
+
+@maybe_script
+def _dequantize_weight(
+    codes: torch.Tensor, codebooks: torch.Tensor, scales: Optional[torch.Tensor] = None
+) -> torch.Tensor:
+    """
+    Decode float weights from quantization codes. Differentiable.
+    :param codes: tensor of integer quantization codes, shape [*dims, num_out_groups, num_in_groups, num_codebooks]
+    :param codebooks: tensor of vectors for each quantization code, [num_codebooks, codebook_size, out_group_size, in_group_size]
+    :param scales: weight will be multiplied by this factor, must be broadcastble with [*dims, out_groups, num_in_groups, out_group_size, in_group_size]
+    :return: reconstructed weight tensor of shape [*dims, num_in_groups*group_size]
+    """
+    num_out_groups, num_in_groups, num_codebooks = codes.shape[-3:]
+    num_codebooks, codebook_size, out_group_size, in_group_size = codebooks.shape
+    out_features = num_out_groups * out_group_size
+    in_features = num_in_groups * in_group_size
+    codebook_offsets = torch.arange(
+        0, num_codebooks * codebook_size, codebook_size, device=codes.device
+    )  # shape: [num_codebooks]
+    reconstructed_weight_flat = F.embedding_bag(
+        codes.flatten(0, -2) + codebook_offsets, codebooks.flatten(0, 1).flatten(-2, -1), mode="sum"
+    )  # [prod(dims) * num_out_groups * num_in_groups, out_group_size * in_group_size]
+
+    reconstructed_weight_groupwise = reconstructed_weight_flat.view(
+        list(codes.shape[:-3]) + [num_out_groups, num_in_groups, out_group_size, in_group_size]
+    )
+    if scales is not None:
+        reconstructed_weight_groupwise = reconstructed_weight_groupwise.mul(scales)
+    return reconstructed_weight_groupwise.swapaxes(-3, -2).reshape(list(codes.shape[:-3]) + [out_features, in_features])
 
 def quantize_model(model: PreTrainedModel, args: Namespace):
     """main entry point to functions for model quantization"""
@@ -56,7 +98,36 @@ def quantize_model(model: PreTrainedModel, args: Namespace):
         train_data = data
         val_data = None
 
+    # Store original weights on the CPU
+    original_weights = {}
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear):
+            original_weights[name] = module.weight.data.clone().to("cpu")
+
     results = quantize_aq(model, train_data, val_data, args)
+
+    # Calculate MSE of weights
+    total_mse = 0.0
+    total_params = 0
+    for name, module in model.named_modules():
+        if isinstance(module, QuantizedLinear):
+            original_weight = original_weights[name]
+            quantized_weight = module.quantized_weight
+            dequantized_weight = _dequantize_weight(
+                quantized_weight.get_codes(),
+                quantized_weight.get_codebooks(),
+                quantized_weight.get_scales()
+            )
+            mse = torch.mean((original_weight - dequantized_weight) ** 2)
+            total_mse += mse * original_weight.numel()
+            total_params += original_weight.numel()
+    
+    avg_mse = total_mse / total_params
+    print(f"\nAverage MSE of weights after quantization: {avg_mse:.6f}")
+    
+    if args.wandb:
+        wandb.log({"avg_weight_mse_after_quantization": avg_mse})
+
     print(f"quantization time: {time.time() - tick:.1f}")
     return results
 
@@ -417,9 +488,6 @@ def perplexity_eval(model: PreTrainedModel, testenc: torch.LongTensor, args: Nam
 
     get_model_head(model).to(torch.device("cpu"))
 
-    if args.wandb:
-        wandb.log({args.dataset_name: ppl})
-
     model.config.use_cache = use_cache
     return ppl
 
@@ -604,7 +672,7 @@ if __name__ == "__main__":
         "--nsamples",
         type=int,
         default=None,
-        help="Number of calibration data samples.If None take all calibration data.",
+        help="Number of calibration data samples. If None take all calibration data.",
     )
     parser.add_argument(
         "--model_seqlen",
@@ -907,7 +975,10 @@ if __name__ == "__main__":
             trust_remote_code=args.trust_remote_code,
         )
         args.dataset_name = dataset
-        perplexity_eval(model, testloader, args)
+        perplexity = perplexity_eval(model, testloader, args)
+        
+        if args.wandb:
+            wandb.log({f"{dataset}_perplexity_post_finetuning": perplexity})
 
     print(f"eval: {torch.cuda.max_memory_allocated()=:,}")
     if args.wandb:

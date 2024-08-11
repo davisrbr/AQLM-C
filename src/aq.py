@@ -56,8 +56,8 @@ class QuantizedWeight(nn.Module):
         self.out_features, self.in_features = reference_weight.shape
         assert self.in_features % in_group_size == 0
         assert self.out_features % out_group_size == 0
-        if nbits_per_codebook > torch.iinfo(code_dtype).bits - is_signed(code_dtype):
-            raise ValueError(f"Code dtype cannot store {nbits_per_codebook} bits; please specify code_dtype manually")
+        # if nbits_per_codebook > torch.iinfo(code_dtype).bits - is_signed(code_dtype):
+        #     raise ValueError(f"Code dtype cannot store {nbits_per_codebook} bits; please specify code_dtype manually")
 
         self.out_group_size, self.in_group_size = out_group_size, in_group_size
         self.num_codebooks = num_codebooks

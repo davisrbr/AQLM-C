@@ -77,15 +77,15 @@ def finetune_groupwise(
         differentiable_parameters, lr=args.finetune_lr, betas=(args.finetune_adam_beta1, args.finetune_adam_beta2)
     )
 
-    assert args.finetune_batch_size % len(args.devices) == 0, "batch_size must be divisible by the number of GPUs"
+    assert args.finetune_batch_size % len(args.devices) == 0, f"batch_size must be divisible by the number of GPUs, but got batch_size={args.finetune_batch_size} and num_devices={len(args.devices)}"
 
     num_samples_per_device = len(train_inps[0])
     local_batch_size = args.local_batch_size
     if local_batch_size is None:
         local_batch_size = args.finetune_batch_size // len(args.devices)
 
-    assert all(len(inps_tensor) == num_samples_per_device for inps_tensor in train_inps)
-    assert args.finetune_batch_size % (local_batch_size * len(args.devices)) == 0, ""
+    assert all(len(inps_tensor) == num_samples_per_device for inps_tensor in train_inps), f"all train_inps must have the same length, but got {[len(inps_tensor) for inps_tensor in train_inps]}, {num_samples_per_device}"
+    assert args.finetune_batch_size % (local_batch_size * len(args.devices)) == 0, f"{args.finetune_batch_size} % {local_batch_size} * {len(args.devices)} != 0"
     num_accumulation_steps = args.finetune_batch_size // (local_batch_size * len(args.devices))
     assert num_samples_per_device % local_batch_size * num_accumulation_steps == 0, (
         num_samples_per_device,

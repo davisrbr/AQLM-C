@@ -17,6 +17,7 @@ def generate_slurm_file(quantized_model_path, output_dir):
     filename = f"aq_ft_{model_short_name}_{hparam_str}.sbatch"
     
     snapshot_path = f"/data/davis_brown/model_transmit/compression_expts/bit-depth/pythia-finetuned/{base_name}"
+    converted_checkpoint_path = f"{snapshot_path}_converted"
     
     content = f"""#!/bin/bash
 #SBATCH --nodes=1
@@ -47,7 +48,6 @@ export NUM_GPUS=1
 
 # Find a free port
 export MASTER_PORT=$(python -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
-
 torchrun --nproc-per-node=$NUM_GPUS --master_port=$MASTER_PORT /data/davis_brown/model_transmit/compression_expts/bit-depth/AQLM-C/finetune_fsdp.py \\
     --base_model $MODEL_PATH \\
     --quantized_model $QUANTIZED_MODEL_PATH \\
@@ -87,7 +87,25 @@ torchrun --nproc-per-node=$NUM_GPUS --master_port=$MASTER_PORT /data/davis_brown
     --verbose_optimizer \\
     --wandb \\
     --eval_every_steps=10 \\
+    --keep_best_model \\
+    --save $SNAPSHOT_PATH \\
+    --save_every_steps 100 \\
     --use_fast_tokenizer
+
+# Convert the saved model to AQLM format
+python /data/davis_brown/model_transmit/compression_expts/bit-depth/AQLM-C/convert_legacy_model_format.py \\
+    --base_model $MODEL_PATH \\
+    --pv_fsdp_dir $SNAPSHOT_PATH \\
+    --code_dtype int32 \\
+    --load_dtype auto \\
+    --quantized_model=./doesnt_matter \\
+    --save {converted_checkpoint_path}
+
+# Run evaluation
+lm_eval --model hf \\
+    --model_args pretrained=$MODEL_PATH,aqlm_checkpoint_path={converted_checkpoint_path},aqlm_src_path=/data/davis_brown/model_transmit/compression_expts/bit-depth/AQLM-C,parallelize=True,dtype=float16 \\
+    --tasks winogrande,piqa,hellaswag,arc_easy,arc_challenge \\
+    --batch_size 4
 """
 
     with open(os.path.join(output_dir, filename), 'w') as f:
